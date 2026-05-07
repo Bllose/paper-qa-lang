@@ -1,0 +1,55 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+sdist/
+wheelhouse/
+
+# ── Virtual environments ──
+.venv/
+venv/
+env/
+ENV/
+
+# ── Environment & secrets ──
+.env
+*.env.local
+*.env.prod
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Testing ──
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+
+# ── Project-specific data ──
+.chroma/
+.downloads/
+.papers.db
+*.db-journal
+
+# ── GitNexus (auto-generated index) ──
+.gitnexus/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Logs ──
+*.log

@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Read(//c/Users/bllos/**)",
+      "mcp__paper-metadata__query_by_doi",
+      "mcp__paper-metadata__query_by_title",
+      "mcp__gitnexus__list_repos",
+      "mcp__gitnexus__query",
+      "Bash(python *)",
+      "Bash(pip show *)",
+      "mcp__paper-download__download_pdf",
+      "Bash(pip install *)",
+      "Bash(python3 -m pip install pymupdf)",
+      "Bash(python3 *)",
+      "Bash(pip list *)",
+      "Bash(ANTHROPIC_API_KEY=\"sk-225113562271428590095cf325cb628a\" python3 -m pytest tests/ -v --tb=short)",
+      "Bash(D:/etc/Python/Python313/python.exe -m pip install langchain-anthropic)",
+      "Bash(ANTHROPIC_API_KEY=\"sk-225113562271428590095cf325cb628a\" python3 -m pytest tests/test_enrichment.py -v --tb=short -k \"test_score_chunk_basic or test_generate_answer\")",
+      "Bash(ANTHROPIC_API_KEY=\"sk-225113562271428590095cf325cb628a\" python3 -m pytest tests/ -v --tb=line)",
+      "Bash(D:/etc/miniconda3/envs/paper-qa/python.exe *)",
+      "Bash(ANTHROPIC_API_KEY=\"sk-225113562271428590095cf325cb628a\" D:/etc/miniconda3/envs/paper-qa/python.exe -m pytest tests/ -v --tb=line)",
+      "Bash(cmd.exe *)",
+      "Bash(uv --version)"
+    ]
+  },
+  "mcpServers": {
+    "paper-metadata": {
+      "command": "python",
+      "args": [
+        "mcp/paper-metadata-mcp/server.py"
+      ]
+    },
+    "paper-download": {
+      "command": "python",
+      "args": [
+        "mcp/paper-download-mcp/server.py"
+      ]
+    }
+  }
+}

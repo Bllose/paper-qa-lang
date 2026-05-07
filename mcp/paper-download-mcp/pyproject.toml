@@ -1,0 +1,10 @@
+[project]
+name = "paper-download-mcp"
+description = "MCP server for finding and downloading academic paper PDFs"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.28,<1",
+    "pydantic>=2.10,<3",
+]
