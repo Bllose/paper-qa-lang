@@ -2,6 +2,8 @@
 
 PaperQA 的 LangChain + LangGraph + MCP 重构版本 — 一个面向学术论文的 RAG 问答系统。
 
+![web演示](./resources/演示web.gif)
+
 ## 架构
 
 ``` text

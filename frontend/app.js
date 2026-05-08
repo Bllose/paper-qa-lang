@@ -326,6 +326,9 @@ class PapersPanel {
   }
 
   #paperCache = [];  // { doc_id, title, ... } 当前论文列表
+  #isIngesting = false;  // 是否正在添加论文
+  #ingestLabel = "";     // 正在添加的论文标签文本
+  #addModalMinimized = false;
 
   constructor() {
     if (PapersPanel.#instance) throw new Error("Use PapersPanel.getInstance()");
@@ -350,6 +353,7 @@ class PapersPanel {
       // Add modal
       addModal:     document.getElementById("add-paper-modal"),
       addClose:     document.getElementById("add-paper-close"),
+      addMinimize:  document.getElementById("add-paper-minimize"),
       doiInput:     document.getElementById("doi-input"),
       doiSubmitBtn: document.getElementById("doi-submit-btn"),
       uploadZone:   document.getElementById("upload-zone"),
@@ -377,8 +381,12 @@ class PapersPanel {
     // Add paper modal
     this.el.addBtn.addEventListener("click", () => this.#openAddModal());
     this.el.addClose.addEventListener("click", () => this.#closeAddModal());
+    this.el.addMinimize.addEventListener("click", () => this.#minimizeAddModal());
     this.el.addModal.addEventListener("click", (e) => {
-      if (e.target === this.el.addModal) this.#closeAddModal();
+      if (e.target === this.el.addModal) {
+        if (this.#isIngesting) this.#minimizeAddModal();
+        else this.#closeAddModal();
+      }
     });
 
     // DOI submit
@@ -450,11 +458,23 @@ class PapersPanel {
 
   #renderPaperList() {
     const list = this.el.paperList;
-    if (!this.#paperCache.length) {
+    if (!this.#paperCache.length && !this.#isIngesting) {
       list.innerHTML = '<p class="paper-list-empty">暂无论文，点击上方添加</p>';
       return;
     }
-    list.innerHTML = this.#paperCache.map((p) => {
+
+    let html = "";
+
+    // 正在添加的临时栏位
+    if (this.#isIngesting) {
+      html += `
+        <button class="paper-item paper-item-temp" id="temp-ingest-item">
+          <span class="paper-item-title temp-loading">${this.#escapeHtml(this.#ingestLabel)}</span>
+          <span class="paper-item-meta">正在处理...</span>
+        </button>`;
+    }
+
+    html += this.#paperCache.map((p) => {
       const title = p.title || "无标题";
       const authors = (p.authors || []).slice(0, 2).join(", ");
       const year = p.year || "";
@@ -465,10 +485,18 @@ class PapersPanel {
         </button>`;
     }).join("");
 
+    list.innerHTML = html || '<p class="paper-list-empty">暂无论文，点击上方添加</p>';
+
     // Bind click on each paper item
-    list.querySelectorAll(".paper-item").forEach((el) => {
+    list.querySelectorAll(".paper-item:not(.paper-item-temp)").forEach((el) => {
       el.addEventListener("click", () => this.#openDetail(el.dataset.docId));
     });
+
+    // 点击临时栏位：恢复添加弹窗
+    const tempItem = list.querySelector("#temp-ingest-item");
+    if (tempItem) {
+      tempItem.addEventListener("click", () => this.#restoreAddModal());
+    }
   }
 
   #escapeHtml(str) {
@@ -480,16 +508,35 @@ class PapersPanel {
   // ── Add modal ──
 
   #openAddModal() {
+    this.#addModalMinimized = false;
     this.el.addModal.style.display = "flex";
-    this.el.doiInput.value = "";
-    this.el.uploadStatus.textContent = "";
-    this.el.ingestStatus.textContent = "";
-    this.el.fileInput.value = "";
-    this.el.doiInput.focus();
+    if (!this.#isIngesting) {
+      this.el.doiInput.value = "";
+      this.el.uploadStatus.textContent = "";
+      this.el.ingestStatus.textContent = "";
+      this.el.fileInput.value = "";
+      this.el.doiInput.focus();
+    }
   }
 
   #closeAddModal() {
+    if (this.#isIngesting) {
+      // 正在添加中，隐藏弹窗（视为最小化），后台继续处理
+      this.#minimizeAddModal();
+    } else {
+      this.#addModalMinimized = false;
+      this.el.addModal.style.display = "none";
+    }
+  }
+
+  #minimizeAddModal() {
+    this.#addModalMinimized = true;
     this.el.addModal.style.display = "none";
+  }
+
+  #restoreAddModal() {
+    this.#addModalMinimized = false;
+    this.el.addModal.style.display = "flex";
   }
 
   // ── DOI ingest ──
@@ -500,6 +547,10 @@ class PapersPanel {
 
     this.el.ingestStatus.textContent = "正在添加...";
     this.el.doiSubmitBtn.disabled = true;
+    this.#isIngesting = true;
+    this.#ingestLabel = `DOI: ${doi}`;
+    this.#renderPaperList();
+
     try {
       const res = await fetch("/v1/papers/ingest/doi", {
         method: "POST",
@@ -512,6 +563,8 @@ class PapersPanel {
       this.#refreshAfterIngest();
     } catch (err) {
       this.el.ingestStatus.textContent = `添加失败: ${err.message}`;
+      this.#isIngesting = false;
+      this.#renderPaperList();
     } finally {
       this.el.doiSubmitBtn.disabled = false;
     }
@@ -531,6 +584,9 @@ class PapersPanel {
     }
     this.el.uploadStatus.textContent = `正在上传: ${file.name}...`;
     this.el.ingestStatus.textContent = "";
+    this.#isIngesting = true;
+    this.#ingestLabel = `上传: ${file.name}`;
+    this.#renderPaperList();
 
     const formData = new FormData();
     formData.append("file", file);
@@ -546,18 +602,25 @@ class PapersPanel {
       this.#refreshAfterIngest();
     } catch (err) {
       this.el.uploadStatus.textContent = `上传失败: ${err.message}`;
+      this.#isIngesting = false;
+      this.#renderPaperList();
     }
   }
 
   async #refreshAfterIngest() {
-    // Reload paper list and close modal shortly
+    this.#isIngesting = false;
     await this.#loadPapers();
-    setTimeout(() => {
-      if (this.el.ingestStatus.textContent.startsWith("添加成功") ||
-          this.el.uploadStatus.textContent.startsWith("上传成功")) {
-        this.#closeAddModal();
-      }
-    }, 1200);
+    if (this.#addModalMinimized) {
+      // 最小化状态：弹窗已隐藏，只需刷新列表即可
+      this.#closeAddModal();
+    } else {
+      setTimeout(() => {
+        if (this.el.ingestStatus.textContent.startsWith("添加成功") ||
+            this.el.uploadStatus.textContent.startsWith("上传成功")) {
+          this.#closeAddModal();
+        }
+      }, 1200);
+    }
   }
 
   // ── Detail modal ──
