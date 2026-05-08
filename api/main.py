@@ -194,6 +194,18 @@ async def ingest_upload(file: UploadFile):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/v1/papers/{doc_id}")
+async def delete_paper(doc_id: str):
+    """Delete a paper and all its chunks from the library."""
+    lib = _get_library()
+    try:
+        lib.delete_paper(doc_id)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error("Delete paper error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Frontend static files ────────────────────────────────────────────────
 
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"

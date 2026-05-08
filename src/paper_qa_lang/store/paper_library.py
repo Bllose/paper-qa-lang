@@ -453,8 +453,11 @@ class PaperLibrary:
             return Paper(doc_id=doc_id, doi=doi)
 
     async def _download_by_doi(self, doi: str, download_dir: str = ".downloads") -> str:
-        """Download a PDF by DOI using the paper-download MCP server."""
+        """Download a PDF by DOI using LLM + paper-download MCP tools (ReAct graph)."""
         from paper_qa_lang.ingestion.identify import _load_mcp_tools
+        from paper_qa_lang.prompts.templates import PAPER_DOWNLOAD_BY_DOI_PROMPT
+        from paper_qa_lang.graph.react import build_react_graph
+        from langchain_core.messages import HumanMessage
 
         mcp_tools = await _load_mcp_tools("paper-download", self._settings)
         if not mcp_tools:
@@ -463,37 +466,46 @@ class PaperLibrary:
                 "Add it to .claude/settings.local.json under 'mcpServers'."
             )
 
-        download_tool = next(
-            (t for t in mcp_tools if t.name == "download_pdf"), None
-        )
-        if not download_tool:
-            raise RuntimeError(
-                "No 'download_pdf' tool found in paper-download MCP server."
-            )
-
         # Ensure the download directory exists
         dest_dir = Path(download_dir).expanduser().resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        result = await download_tool.ainvoke(
-            {"doi": doi, "output_dir": str(dest_dir)}
+        llm = self._settings.llm.get_llm()
+        bound_llm = llm.bind_tools(mcp_tools) if mcp_tools else llm
+        graph = build_react_graph(bound_llm, mcp_tools)
+
+        result_state = await graph.ainvoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=PAPER_DOWNLOAD_BY_DOI_PROMPT.format(
+                            doi=doi, output_dir=str(dest_dir)
+                        )
+                    )
+                ]
+            }
         )
 
-        # The MCP tool returns a text response like:
-        #   "Downloaded: /path/to/file.pdf\nSize: ...\nDOI: ..."
-        if isinstance(result, str):
-            result_text = result.strip()
-        elif isinstance(result, list):
-            key = result[0]['type']
-            result_text = result[0][key]
-        
-        if result_text.startswith("Downloaded: "):
-            return result_text.split("\n")[0].replace("Downloaded: ", "").strip()
-        raise RuntimeError(f"Download failed for DOI {doi}: {result}")
+        if result_state.get("error"):
+            logger.warning("ReAct download graph finished with error: %s", result_state["error"])
 
-        # raise RuntimeError(
-        #     f"Unexpected result type from download_pdf tool: {type(result).__name__}"
-        # )
+        final_msg = (
+            result_state["messages"][-1] if result_state.get("messages") else None
+        )
+        if final_msg and hasattr(final_msg, "text"):
+            file_path = final_msg.text.strip()
+        elif final_msg:
+            file_path = str(final_msg).strip()
+        else:
+            raise RuntimeError(f"Download failed for DOI {doi}: no response from agent")
+
+        # Validate the returned path exists
+        if not os.path.isfile(file_path):
+            raise RuntimeError(
+                f"Download failed for DOI {doi}: returned path does not exist: {file_path}"
+            )
+
+        return file_path
 
     # ---- query ----
 

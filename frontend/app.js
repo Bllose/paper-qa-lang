@@ -374,13 +374,6 @@ class PapersPanel {
       this.#toggleDropdown();
     });
 
-    // Click outside to close dropdown
-    document.addEventListener("click", (e) => {
-      if (this.#dropdownOpen && !this.el.navBtn.parentElement.contains(e.target)) {
-        this.#closeDropdown();
-      }
-    });
-
     // Add paper modal
     this.el.addBtn.addEventListener("click", () => this.#openAddModal());
     this.el.addClose.addEventListener("click", () => this.#closeAddModal());
@@ -585,7 +578,10 @@ class PapersPanel {
     }
   }
 
+  #detailDocId = null;  // 当前详情弹窗对应的 doc_id
+
   #renderDetail(paper) {
+    this.#detailDocId = paper.doc_id;
     this.el.detailTitle.textContent = paper.title || "论文详情";
 
     const fields = [
@@ -627,10 +623,40 @@ class PapersPanel {
       .join("");
 
     this.el.detailBody.innerHTML = rows || "<p>无可用信息</p>";
+
+    // 添加删除按钮
+    const btnRow = document.createElement("div");
+    btnRow.className = "detail-actions";
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger";
+    delBtn.textContent = "删除此论文";
+    delBtn.addEventListener("click", () => this.#deletePaper());
+    btnRow.appendChild(delBtn);
+    this.el.detailBody.appendChild(btnRow);
+  }
+
+  async #deletePaper() {
+    if (!this.#detailDocId) return;
+    if (!confirm("确定要删除这篇论文及其全部索引数据吗？此操作不可撤销。")) return;
+
+    try {
+      const res = await fetch(`/v1/papers/${encodeURIComponent(this.#detailDocId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `HTTP ${res.status}`);
+      }
+      this.#closeDetailModal();
+      this.#loadPapers();
+    } catch (err) {
+      alert(`删除失败: ${err.message}`);
+    }
   }
 
   #closeDetailModal() {
     this.el.detailModal.style.display = "none";
+    this.#detailDocId = null;
   }
 }
 
