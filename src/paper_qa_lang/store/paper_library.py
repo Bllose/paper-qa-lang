@@ -438,142 +438,19 @@ class PaperLibrary:
         return self.add_paper(resolved_path, paper, **kwargs)
 
     async def _identify_by_doi(self, doi: str) -> Paper:
-        """Query paper-metadata-mcp and build a Paper from the result.
+        """Identify a paper by DOI using LLM + MCP tools (ReAct graph).
 
-        Falls back to a minimal Paper (doc_id from DOI) if the MCP server
-        is unavailable.
+        Delegates to :func:`paper_qa_lang.ingestion.identify.paper_from_doi`
+        which follows the same ReAct-agent pattern as ``paper_from_pdf``.
         """
-        doc_id = re.sub(r"[^\w]", "_", doi)
-
         try:
-            from paper_qa_lang.ingestion.identify import _load_mcp_tools
+            from paper_qa_lang.ingestion.identify import paper_from_doi
 
-            mcp_tools = await _load_mcp_tools("paper-metadata", self._settings)
-            if not mcp_tools:
-                logger.info(
-                    "paper-metadata MCP not available, using minimal Paper for DOI %s",
-                    doi,
-                )
-                return Paper(doc_id=doc_id, doi=doi)
-
-            query_tool = next(
-                (t for t in mcp_tools if t.name == "query_by_doi"), None
-            )
-            bibtex_tool = next(
-                (t for t in mcp_tools if t.name == "get_bibtex"), None
-            )
-
-            metadata_text: str | None = None
-            bibtex_str: str | None = None
-
-            if query_tool:
-                raw = await query_tool.ainvoke({"doi": doi})
-                if isinstance(raw, str):
-                    metadata_text = raw
-
-            if bibtex_tool:
-                raw = await bibtex_tool.ainvoke({"doi": doi})
-                if isinstance(raw, str) and not raw.startswith("No BibTeX"):
-                    bibtex_str = raw
-
-            return self._build_paper_from_metadata(
-                doi, doc_id, metadata_text, bibtex_str,
-            )
+            return await paper_from_doi(doi)
         except Exception as exc:
-            logger.warning(
-                "Metadata lookup failed for DOI %s: %s", doi, exc,
-            )
+            logger.warning("DOI identification failed for %s: %s", doi, exc)
+            doc_id = re.sub(r"[^\w]", "_", doi)
             return Paper(doc_id=doc_id, doi=doi)
-
-    def _build_paper_from_metadata(
-        self,
-        doi: str,
-        doc_id: str,
-        metadata_text: str | None,
-        bibtex_str: str | None,
-    ) -> Paper:
-        """Build a Paper from the MCP query_by_doi response text and BibTeX."""
-        data: dict[str, Any] = {"doc_id": doc_id, "doi": doi}
-
-        # Parse BibTeX first (more structured)
-        if bibtex_str:
-            bib_data = self._parse_bibtex(bibtex_str)
-            data.setdefault("title", bib_data.get("title"))
-            data.setdefault("authors", bib_data.get("authors", []))
-            data.setdefault("year", bib_data.get("year"))
-            data.setdefault("journal", bib_data.get("journal"))
-            data["bibtex"] = bibtex_str
-
-        # Parse text metadata form (fills gaps BibTeX might miss)
-        if metadata_text:
-            for line in metadata_text.split("\n"):
-                line = line.strip()
-                if line.startswith("Title:") and "title" not in data:
-                    data["title"] = line[len("Title:"):].strip()
-                elif line.startswith("DOI:") and not data.get("doi"):
-                    data["doi"] = line[len("DOI:"):].strip()
-                elif line.startswith("Journal:") and "journal" not in data:
-                    data["journal"] = line[len("Journal:"):].strip()
-                elif line.startswith("Citation Count:"):
-                    try:
-                        data["citation_count"] = int(
-                            line[len("Citation Count:"):].strip()
-                        )
-                    except ValueError:
-                        pass
-                elif line.startswith("OA PDF URL:") and "pdf_url" not in data:
-                    data["pdf_url"] = line[len("OA PDF URL:"):].strip()
-                elif line.startswith("Abstract:"):
-                    abstract = line[len("Abstract:"):].strip()
-                    if abstract:
-                        data["abstract"] = abstract
-
-        # Ensure minimum fields
-        data.setdefault("title", f"Paper {doi}")
-        data.setdefault("authors", [])
-
-        return Paper(**data)
-
-    @staticmethod
-    def _parse_bibtex(bibtex_str: str) -> dict[str, Any]:
-        """Minimal BibTeX parser — extracts title, author, year, journal."""
-        result: dict[str, Any] = {}
-
-        # Extract title
-        m = re.search(
-            r"title\s*=\s*\{([^}]+)\}", bibtex_str, re.IGNORECASE
-        )
-        if m:
-            result["title"] = m.group(1).strip()
-
-        # Extract author(s)
-        m = re.search(
-            r"author\s*=\s*\{([^}]+)\}", bibtex_str, re.IGNORECASE
-        )
-        if m:
-            authors_str = m.group(1)
-            authors = [a.strip() for a in authors_str.split(" and ")]
-            result["authors"] = authors
-
-        # Extract year
-        m = re.search(
-            r"year\s*=\s*\{([^}]+)\}", bibtex_str, re.IGNORECASE
-        )
-        if m:
-            try:
-                result["year"] = int(m.group(1).strip())
-            except ValueError:
-                pass
-
-        # Extract journal
-        m = re.search(
-            r"(?:journal|booktitle)\s*=\s*\{([^}]+)\}",
-            bibtex_str, re.IGNORECASE,
-        )
-        if m:
-            result["journal"] = m.group(1).strip()
-
-        return result
 
     async def _download_by_doi(self, doi: str, download_dir: str = ".downloads") -> str:
         """Download a PDF by DOI using the paper-download MCP server."""

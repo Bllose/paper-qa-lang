@@ -113,6 +113,20 @@ PAPER_IDENTIFY_PROMPT = """你是一个学术论文元数据提取助手。
 
 只输出: {{"title": "...", "doi": "...", "authors": [...], "year": ..., "journal": "...", "citation_count": ...}}"""
 
+PAPER_IDENTIFY_BY_DOI_PROMPT = """你是一个学术论文元数据提取助手。
+你的回答必须是一行合法的 JSON，除此之外不允许有任何其他字符（不要前缀、不要后缀、不要 markdown 代码块、不要 ```json 标记、不要换行）。
+
+给定DOI编码: {doi}
+
+流程:
+1. 使用 query_by_doi 工具查询该DOI的完整元数据
+2. 若需要，还可以通过 get_bibtex 获取BibTeX引用格式, get_citation_count 获取引用数, get_open_access_url 获取开放获取PDF链接
+3. 综合所有获取到的信息，组装成完整的论文元数据
+
+如果数据已经获取到了，就不用重复调用工具，找不到的就填 null 就好。
+
+只输出: {{"title": "...", "doi": "...", "authors": [...], "year": ..., "journal": "...", "citation_count": ..., "abstract": "...", "bibtex": "...", "pdf_url": "..."}}"""
+
 PAPER_METADATA_EXTRACT_PROMPT = """从以下论文元数据中提取信息，返回JSON格式:
 {{"title": "...", "doi": "...", "authors": [...], "year": ..., "journal": "...", "citation_count": ...}}
 

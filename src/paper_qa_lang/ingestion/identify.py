@@ -120,6 +120,54 @@ async def paper_from_pdf(path: str | os.PathLike) -> "Paper":
     return Paper(**data, doc_id=doc_id, file_location=path)
 
 
+async def paper_from_doi(doi: str) -> "Paper":
+    """Identify a paper from a DOI and return a Paper object.
+
+    Flow:
+    1. Use a ReAct Agent Graph to let the LLM query paper-metadata-mcp tools
+    2. Parse the LLM's final JSON response
+    3. Assemble and return a ``Paper`` object
+    """
+    from paper_qa_lang.models.types import Paper
+
+    # Step 1: Setup LLM and MCP tools
+    settings = Settings()
+    llm = settings.llm.get_llm()
+    mcp_tools = await _load_mcp_tools("paper-metadata", settings)
+
+    from paper_qa_lang.prompts.templates import PAPER_IDENTIFY_BY_DOI_PROMPT
+    from paper_qa_lang.graph.react import build_react_graph
+
+    # Step 2: Build ReAct graph and run tool-calling loop
+    bound_llm = llm.bind_tools(mcp_tools) if mcp_tools else llm
+    graph = build_react_graph(bound_llm, mcp_tools)
+
+    result_state = await graph.ainvoke(
+        {
+            "messages": [
+                HumanMessage(
+                    content=PAPER_IDENTIFY_BY_DOI_PROMPT.format(doi=doi)
+                )
+            ]
+        }
+    )
+
+    if result_state.get("error"):
+        logger.warning("ReAct graph finished with error: %s", result_state["error"])
+
+    # Step 3: Parse final answer → dict, then build Paper
+    doc_id = re.sub(r"[^\w]", "_", doi)
+    final_msg = (
+        result_state["messages"][-1] if result_state.get("messages") else None
+    )
+    data = _parse_llm_metadata_response(final_msg) if final_msg else {}
+
+    if not data.get("title"):
+        data["title"] = f"Paper {doi}"
+
+    return Paper(**data, doc_id=doc_id)
+
+
 def _parse_llm_metadata_response(response: Any) -> dict[str, Any]:
     """Extract paper metadata JSON from an AIMessage response."""
     raw = response.text if hasattr(response, "text") else ""
