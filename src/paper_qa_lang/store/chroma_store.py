@@ -62,6 +62,11 @@ def _document_to_chunk(doc: Document) -> PaperChunk:
 class ChromaStore:
     """Wrapper around LangChain Chroma for paper chunk storage and retrieval."""
 
+    @staticmethod
+    def _cosine_score(distance: float) -> float:
+        """Convert cosine distance to similarity score [0, 1]."""
+        return 1.0 - distance
+
     def __init__(
         self,
         collection_name: str = "papers",
@@ -77,6 +82,8 @@ class ChromaStore:
             collection_name=collection_name,
             persist_directory=persist_directory,
             embedding_function=embedding_fn,
+            collection_metadata={"hnsw:space": "cosine"},
+            relevance_score_fn=self._cosine_score,
         )
         self._embedding_fn = embedding_fn
 
@@ -176,6 +183,31 @@ class ChromaStore:
             filter=filter,
         )
         return [_document_to_chunk(d) for d in docs]
+
+    def similarity_search_with_scores(
+        self,
+        query: str,
+        k: int = 10,
+        score_threshold: float = 0.5,
+        filter: dict[str, Any] | None = None,  # noqa: A002
+    ) -> list[tuple[PaperChunk, float]]:
+        """Search with relevance scores, filtering below threshold.
+
+        Uses LangChain's ``similarity_search_with_relevance_scores`` which
+        normalises scores to [0, 1] (1 = perfect match).
+
+        Only results with score >= ``score_threshold`` are returned.
+        """
+        docs_and_scores = self._store.similarity_search_with_relevance_scores(
+            query,
+            k=k,
+            filter=filter,
+            score_threshold=score_threshold,
+        )
+        return [
+            (_document_to_chunk(doc), score)
+            for doc, score in docs_and_scores
+        ]
 
     def count(self) -> int:
         """Total number of documents in the collection."""

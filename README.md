@@ -171,6 +171,76 @@ python server.py
 | `chat` | `engine.py` / `cli.py` | 对话引擎、CLI 交互界面 |
 | `config` | `settings.py` | 统一配置 (Pydantic Settings + .env) |
 
+## 上下文宽度监控
+
+### 数据流
+
+```text
+用户输入
+  → engine.py: 构建 messages = [system(+检索chunks), ...history, user]
+  → llm.get_num_tokens_from_messages(messages)      ← 预计算 input_tokens
+  → SSE → 前端即时显示「输入: N tokens」
+  → llm.astream(messages)                           ← 流式调用
+  → chunk.usage_metadata 捕获最后一个 chunk 的用量    ← 实际 output + input
+  → SSE → 前端累加 output，修正 input，显示累计总消耗
+```
+
+### 上下文的三部分构成
+
+每条 LLM 调用的 `input_tokens` 由以下三部分拼接而成：
+
+| 来源 | 内容 | 变化规律 |
+| ---- | ---- | -------- |
+| System Prompt | 基础指令 + 论文检索结果（chunks 需通过余弦相似度阈值 `score_threshold=0.3` 才会纳入） | 每次检索后重新构建 |
+| 对话历史 | 历史 user / assistant 消息（受 `max_history` 截断） | 逐轮累积增长 |
+| 当前消息 | 用户最新输入 | 每条不同 |
+
+`messages = [SystemMessage(含检索结果), *历史, HumanMessage(当前)]`
+
+### 预计算与修正
+
+`get_num_tokens_from_messages()` 是 LLM provider 的客户端/服务端 tokenizer 估算值。流式结束后，从最后一个 `AIMessageChunk` 的 `usage_metadata` 中提取 LLM 真实计费数据，与预估值对比并自动修正。
+
+- **Anthropic** (`ChatAnthropic`): 调用官方 `messages.count_tokens` API，服务端精确计数，`stream_usage=True` 默认开启
+- **OpenAI** (`ChatOpenAI`): 使用 `tiktoken` 客户端估算，`stream_usage` 默认开启
+
+两个关键参数：
+
+| 参数 | 位置 | 用途 |
+| ---- | ---- | ---- |
+| `stream_usage=True` | LLM 构造参数 | 流式最后一个 chunk 携带 `usage_metadata` |
+| `score_threshold=0.3` | `ChatEngine` | 低于此值的 chunks 不纳入上下文 |
+
+### SSE 事件协议
+
+后端 `astream_chat` 产出的结构化事件经 `api/main.py` 透传为 SSE：
+
+| 事件 type | JSON 结构 | 前端行为 |
+| --------- | --------- | -------- |
+| `input_tokens` | `{"type":"input_tokens", "count": N}` | 刷新 `#input-tokens`，累加入累计输入 |
+| `token` | `{"type":"token", "content":"..."}` | 流式拼接 render markdown |
+| `usage` | `{"type":"usage", "input_tokens":N, "output_tokens":M}` | 累加 output，修正 input 差值 |
+
+### 页面展示
+
+stats 栏同一行显示：
+
+```html
+输入: <strong id="input-tokens">0</strong>  <!-- 最新一次上下文宽度 -->
+累计消耗: <strong id="total-tokens">0</strong>  <!-- 会话总消耗 = Σ input + Σ output -->
+```
+
+前端维护的状态由 [app.js](frontend/app.js) 的 `ChatApp` 管理：
+
+```text
+#lastInputTokens    → 最新一次输入宽度 (每次发送消息时刷新)
+#totalInputTokens   → 历史累计输入
+#totalOutputTokens  → 历史累计输出
+totalConsumedTokens → getter: input + output
+```
+
+每次发送新消息时，`input-tokens` 立刻刷新为当次上下文宽度，`total-tokens` 持续累加——用户可同时看到单次开销和会话总计。
+
 ## 测试
 
 ```bash

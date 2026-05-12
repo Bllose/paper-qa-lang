@@ -17,13 +17,15 @@ class ChatApp {
 
   // ── 扩展回调（外部可注入） ──
   onMessageComplete = null;   // (role, content) => void
-  onTokenReceived = null;     // (token, totalTokens) => void
+  onTokenReceived = null;     // (token, lastInputTokens, totalTokens) => void
 
   // ── 状态 ──
   #abortController = null;
   #healthInterval = null;
-  #messages = [];        // { role, content }
-  #totalTokens = 0;
+  #messages = [];             // { role, content }
+  #lastInputTokens = 0;      // 最新一次的输入 tokens
+  #totalInputTokens = 0;     // 累计输入 tokens
+  #totalOutputTokens = 0;    // 累计输出 tokens
   #isStreaming = false;
   #resizeObserver = null;
 
@@ -50,7 +52,8 @@ class ChatApp {
     this.#el.welcome = document.getElementById("welcome");
     this.#el.input = document.getElementById("chat-input");
     this.#el.sendBtn = document.getElementById("send-btn");
-    this.#el.tokenCount = document.getElementById("token-count");
+    this.#el.inputTokens = document.getElementById("input-tokens");
+    this.#el.totalTokens = document.getElementById("total-tokens");
     this.#el.msgCount = document.getElementById("msg-count");
     this.#el.winHeight = document.getElementById("win-height");
     this.#el.healthDot = document.getElementById("health-dot");
@@ -192,13 +195,22 @@ class ChatApp {
 
           try {
             const parsed = typeof data === "string" ? JSON.parse(data) : data;
-            if (parsed.token) {
-              fullContent += parsed.token;
-              this.#totalTokens++;
+            if (parsed.type === "input_tokens") {
+              this.#lastInputTokens = parsed.count || 0;
+              this.#totalInputTokens += this.#lastInputTokens;
+              this.#updateStats();
+            } else if (parsed.type === "token") {
+              fullContent += parsed.content;
               this.#renderAssistantContent(bubble, fullContent);
               this.#scrollToBottom();
+              this.onTokenReceived?.(parsed.content, this.#lastInputTokens, this.totalConsumedTokens);
+            } else if (parsed.type === "usage") {
+              this.#totalOutputTokens += parsed.output_tokens || 0;
+              if (parsed.input_tokens && parsed.input_tokens !== this.#lastInputTokens) {
+                this.#totalInputTokens += parsed.input_tokens - this.#lastInputTokens;
+                this.#lastInputTokens = parsed.input_tokens;
+              }
               this.#updateStats();
-              this.onTokenReceived?.(parsed.token, this.#totalTokens);
             } else if (parsed.error) {
               throw new Error(parsed.error);
             }
@@ -297,16 +309,23 @@ class ChatApp {
     });
   }
 
+  get totalConsumedTokens() {
+    return this.#totalInputTokens + this.#totalOutputTokens;
+  }
+
   #updateStats() {
-    this.#el.tokenCount.textContent = this.#totalTokens;
+    this.#el.inputTokens.textContent = this.#lastInputTokens;
+    this.#el.totalTokens.textContent = this.totalConsumedTokens;
     this.#el.msgCount.textContent = this.#messages.length;
   }
 
-  /** 外部重置对话（后续功能） */
+  /** 外部重置对话 */
   reset() {
     this.cancelStreaming();
     this.#messages = [];
-    this.#totalTokens = 0;
+    this.#lastInputTokens = 0;
+    this.#totalInputTokens = 0;
+    this.#totalOutputTokens = 0;
     this.#el.messages.querySelectorAll(".message").forEach((el) => el.remove());
     this.#el.welcome.classList.remove("hidden");
     this.#updateStats();

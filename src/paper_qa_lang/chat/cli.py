@@ -62,12 +62,23 @@ async def _chat_loop(engine: ChatEngine, use_rich: bool) -> None:
             # Short "thinking" notice — replaced by first token
             console.print("[dim]Thinking...[/dim]")
             full = ""
-            async for token in engine.astream_chat(message):
-                if not full:
-                    # First token: go up 1 line, clear it, print header
-                    console.print("\x1b[1A\x1b[2K[bold green]Assistant[/bold green] ", end="")
-                full += token
-                console.print(token, end="")
+            async for event in engine.astream_chat(message):
+                if event["type"] == "input_tokens":
+                    if event["count"]:
+                        console.print(f"\x1b[1A\x1b[2K[dim]上下文 ~{event['count']} tokens[/dim]")
+                elif event["type"] == "token":
+                    text = event["content"]
+                    if not full:
+                        console.print(
+                            "\x1b[1A\x1b[2K[bold green]Assistant[/bold green] ", end=""
+                        )
+                    full += text
+                    console.print(text, end="")
+                elif event["type"] == "usage":
+                    console.print(
+                        f"\n[dim]本次: input={event['input_tokens']}, "
+                        f"output={event['output_tokens']}[/dim]"
+                    )
             console.print()  # trailing newline after response
     else:
         # Plain fallback without rich
@@ -83,8 +94,17 @@ async def _chat_loop(engine: ChatEngine, use_rich: bool) -> None:
                 continue
 
             print("Assistant: ", end="", flush=True)
-            async for token in engine.astream_chat(message):
-                print(token, end="", flush=True)
+            async for event in engine.astream_chat(message):
+                if event["type"] == "input_tokens":
+                    if event["count"]:
+                        print(f"\n[上下文 ~{event['count']} tokens]")
+                elif event["type"] == "token":
+                    print(event["content"], end="", flush=True)
+                elif event["type"] == "usage":
+                    print(
+                        f"\n[本次: input={event['input_tokens']}, "
+                        f"output={event['output_tokens']}]"
+                    )
             print()
 
 

@@ -516,8 +516,9 @@ class PaperLibrary:
         mmr: bool = True,
         lambda_mult: float = 0.5,
         filter: dict[str, Any] | None = None,  # noqa: A002
+        score_threshold: float | None = None,
     ) -> list[PaperChunk]:
-        """Vector search — plain or MMR.
+        """Vector search — plain or MMR, optionally with relevance threshold.
 
         Args:
             query: Natural-language query.
@@ -525,10 +526,19 @@ class PaperLibrary:
             mmr: Use MMR (True) or plain similarity (False).
             lambda_mult: MMR diversity knob (0=diverse, 1=relevant).
             filter: Chroma metadata filter dict.
+            score_threshold: If set (0.0–1.0), filter out results with
+                relevance score below this value. Uses cosine-similarity-based
+                scoring. When this is set, MMR is disabled (score filtering
+                takes priority).
 
         Returns:
             Ranked list of PaperChunks.
         """
+        if score_threshold is not None and score_threshold > 0:
+            scored = self._vector_store.similarity_search_with_scores(
+                query, k=k, filter=filter, score_threshold=score_threshold
+            )
+            return [chunk for chunk, _score in scored]
         if mmr:
             return self._vector_store.max_marginal_relevance_search(
                 query, k=k, lambda_mult=lambda_mult, filter=filter

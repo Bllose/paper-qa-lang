@@ -89,11 +89,11 @@ class DoiIngestRequest(BaseModel):
 
 
 async def _event_stream(message: str) -> AsyncIterator[bytes]:
-    """SSE event stream: yield each token as a JSON data event."""
+    """SSE event stream: yield structured events (input_tokens, token, usage)."""
     engine = _get_engine()
     try:
-        async for token in engine.astream_chat(message):
-            data = json.dumps({"token": token}, ensure_ascii=False)
+        async for event in engine.astream_chat(message):
+            data = json.dumps(event, ensure_ascii=False)
             yield f"data: {data}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:

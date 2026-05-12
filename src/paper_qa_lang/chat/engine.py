@@ -6,7 +6,7 @@ import logging
 from typing import Any, AsyncIterator
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
 
 from paper_qa_lang.models.types import PaperChunk
 from paper_qa_lang.prompts.templates import CHAT_SYSTEM_PROMPT
@@ -47,8 +47,10 @@ class ChatEngine:
     Flow for each message:
       1. Search the paper knowledge base (always)
       2. Build a prompt with system + history + search results + user message
-      3. Stream the LLM response token by token
-      4. Save the conversation history
+      3. Pre-compute input token count
+      4. Stream the LLM response token by token
+      5. Capture actual usage metadata from the stream
+      6. Save the conversation history
 
     The LLM decides autonomously whether to use the search results based
     on their relevance to the question — no separate classification step.
@@ -67,40 +69,67 @@ class ChatEngine:
         self.k = k
         self.system_prompt = system_prompt or CHAT_SYSTEM_PROMPT
         self.max_history = max_history
+        self.score_threshold: float | None = 0.3
         self.messages: list[BaseMessage] = []
+        self.last_usage: dict[str, int] | None = None
 
-    async def astream_chat(self, message: str) -> AsyncIterator[str]:
-        """Stream a chat response, yielding text tokens.
+    async def astream_chat(self, message: str) -> AsyncIterator[dict[str, Any]]:
+        """Stream a chat response, yielding structured events.
 
-        The knowledge base is always searched and results are included in
-        the prompt context. The LLM decides whether to use them.
+        Event types:
+            {"type": "input_tokens", "count": N}   — estimated input tokens
+            {"type": "token", "content": "..."}     — text content chunk
+            {"type": "usage", "input_tokens": N, "output_tokens": M}  — actual usage
         """
-        # 1. Search knowledge base
-        chunks = self.paper_lib.search(query=message, k=self.k)
+        # 1. Search knowledge base (with relevance threshold)
+        chunks = self.paper_lib.search(
+            query=message, k=self.k, score_threshold=self.score_threshold
+        )
         if chunks:
             logger.debug("Retrieved %d chunks for: %.60s", len(chunks), message)
 
         # 2. Build message list
         system = SystemMessage(content=self._build_system(chunks))
         user = HumanMessage(content=message)
-        # Keep recent history (each round adds 2 messages: user + ai)
         history = self.messages[-(self.max_history * 2) :]
         messages = [system, *history, user]
 
-        # 3. Stream response
+        # 3. Pre-compute estimated input tokens
+        try:
+            estimated_input = self.llm.get_num_tokens_from_messages(messages)
+            yield {"type": "input_tokens", "count": estimated_input}
+        except Exception:
+            logger.debug("Failed to estimate input tokens, skipping")
+            yield {"type": "input_tokens", "count": 0}
+
+        # 4. Stream response
         full_response = ""
+        last_chunk: AIMessageChunk | None = None
         try:
             async for chunk in self.llm.astream(messages):
+                last_chunk = chunk
                 content = _extract_content(chunk)
                 if content:
                     full_response += content
-                    yield content
+                    yield {"type": "token", "content": content}
         except Exception as e:
             logger.error("Stream error: %s", e)
-            yield f"\n[Error: {e}]"
+            yield {"type": "token", "content": f"\n[Error: {e}]"}
             return
 
-        # 4. Save conversation history
+        # 5. Emit actual usage from stream metadata
+        usage = None
+        if last_chunk is not None and hasattr(last_chunk, "usage_metadata"):
+            usage = last_chunk.usage_metadata
+        if usage:
+            self.last_usage = dict(usage)
+            yield {
+                "type": "usage",
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            }
+
+        # 6. Save conversation history
         self.messages.append(user)
         self.messages.append(AIMessage(content=full_response))
 
