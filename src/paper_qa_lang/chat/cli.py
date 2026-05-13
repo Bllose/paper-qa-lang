@@ -11,7 +11,10 @@ import argparse
 import asyncio
 import logging
 
+from paper_qa_lang.chat.classifier import QuestionClassifier
 from paper_qa_lang.chat.engine import ChatEngine
+from paper_qa_lang.config.settings import Settings
+from paper_qa_lang.embeddings.qwen_embedding import BgeEmbedding
 from paper_qa_lang.store.paper_library import PaperLibrary
 
 logger = logging.getLogger(__name__)
@@ -114,8 +117,27 @@ async def _amain(args: argparse.Namespace) -> None:
         format="%(message)s",
     )
 
-    lib = PaperLibrary()
-    engine = ChatEngine(paper_library=lib)
+    settings = Settings()
+    lib = PaperLibrary(settings=settings)
+
+    # Set up classifier with BGE embeddings
+    emb_model_path = settings.embedding.model_path or "D:/workplace/models/BAAI/bge-base-zh-v1.5"
+    embedding_model = BgeEmbedding(model_path=emb_model_path)
+    classifier = QuestionClassifier(
+        embedding_model=embedding_model,
+        threshold=settings.classifier.threshold,
+        margin=settings.classifier.margin,
+        top_k=settings.classifier.top_k,
+    )
+
+    # Set up small chat model for greetings
+    small_llm = settings.small_chat.getSmallChatModel()
+
+    engine = ChatEngine(
+        paper_library=lib,
+        classifier=classifier,
+        small_llm=small_llm,
+    )
 
     use_rich = not args.no_color and HAS_RICH
     await _chat_loop(engine, use_rich)

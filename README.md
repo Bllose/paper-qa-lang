@@ -171,6 +171,80 @@ python server.py
 | `chat` | `engine.py` / `cli.py` | 对话引擎、CLI 交互界面 |
 | `config` | `settings.py` | 统一配置 (Pydantic Settings + .env) |
 
+## 问题分类与路由
+
+ChatEngine 在收到用户消息后，先通过嵌入式模型进行零样本分类，再根据类别走不同的回答路线。
+
+### 分类架构
+
+```text
+用户问题
+  → BGE Embedding 编码（与 exemplar 使用同一编码方法，无检索前缀）
+  → 与预计算的 exemplar 向量逐一计算余弦相似度
+  → 按类别取 Top-K 均值 + 边距判断
+  → 三类输出:
+      ├─ 打招呼/自我介绍  → 小模型直接回答（不搜知识库，不统计 token）
+      ├─ AI技术/论文      → 知识库搜索 + 主模型 RAG 回答
+      └─ 其他             → 主模型直接回答（不搜知识库）
+```
+
+### 术语表
+
+分类依赖预定义的 exemplar 列表，存储在 `src/paper_qa_lang/data/` 下：
+
+| 文件 | 类别 | 例句数 |
+|------|------|--------|
+| `greetings.json` | 打招呼/自我介绍 | 28 |
+| `ai_tech.json` | AI技术/论文 | 40 |
+
+Agent 启动时加载所有 exemplar，通过 `BgeEmbedding.embed_documents()` 批量预计算向量。运行时对外部输入仅做一次 `embed_documents()` 推理，开销恒定。
+
+### 算法：Top-K 均值 + 边距
+
+单条 exemplar 匹配容易被噪音误导（BGE 空间中短中文对话句天然聚集）。改为类别级判断：
+
+1. **Top-K 均值** — 与每类别相似度最高的 K 条 exemplar 取平均，作为该类别得分
+2. **绝对阈值** — 最高类别得分 ≥ `threshold` 才有效
+3. **边距检查** — 最佳类别必须领先 runner-up ≥ `margin`，否则归"其他"
+
+```
+"今天星期几"  →  greetings Top5均值=0.62  AI_tech Top5均值=0.58
+              →  边距 0.04 < margin(0.06)  →  "其他" ✓
+```
+
+### 配置参数
+
+```python
+# settings.py → ClassifierSettings
+threshold: float = 0.55   # 最低 Top-K 均值
+margin: float = 0.06      # 必须领先 runner-up 的边距
+top_k: int = 5            # 每类别取前 K 条均值
+```
+
+### 小模型配置
+
+打招呼/自我介绍走 `SmallChatSettings` 独立配置，凭据解析优先级：
+
+```
+显式赋值 → SMALL_{PROVIDER}_API_KEY → {PROVIDER}_API_KEY（回退共享）
+```
+
+```bash
+# .env 示例
+SMALL_MODEL_NAME=gpt-4o-mini
+SMALL_OPENAI_API_KEY=sk-xxx      # 不设则回退到 OPENAI_API_KEY
+SMALL_OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+### 新增文件
+
+| 文件 | 职责 |
+|------|------|
+| `chat/classifier.py` | `QuestionClassifier` — 零样本分类，Top-K 均值 + 边距 |
+| `data/greetings.json` | 打招呼/自我介绍术语例句 |
+| `data/ai_tech.json` | AI 技术/论文术语例句 |
+| `config/settings.py` | 新增 `SmallChatSettings`、`ClassifierSettings` |
+
 ## 上下文宽度监控
 
 ### 数据流

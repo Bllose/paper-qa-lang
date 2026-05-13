@@ -18,7 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
+from paper_qa_lang.chat.classifier import QuestionClassifier
 from paper_qa_lang.chat.engine import ChatEngine
+from paper_qa_lang.config.settings import Settings
+from paper_qa_lang.embeddings.qwen_embedding import BgeEmbedding
 from paper_qa_lang.models.types import Paper
 from paper_qa_lang.store.paper_library import PaperLibrary
 
@@ -36,21 +39,46 @@ app.add_middleware(
 )
 
 # Singletons — rebuild on first request
+_settings: Settings | None = None
 _library: PaperLibrary | None = None
 _engine: ChatEngine | None = None
+
+
+def _get_settings() -> Settings:
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
 
 
 def _get_library() -> PaperLibrary:
     global _library
     if _library is None:
-        _library = PaperLibrary()
+        _library = PaperLibrary(settings=_get_settings())
     return _library
 
 
 def _get_engine() -> ChatEngine:
     global _engine
     if _engine is None:
-        _engine = ChatEngine(paper_library=_get_library())
+        settings = _get_settings()
+
+        emb_model_path = settings.embedding.model_path or "D:/workplace/models/BAAI/bge-base-zh-v1.5"
+        embedding_model = BgeEmbedding(model_path=emb_model_path)
+        classifier = QuestionClassifier(
+            embedding_model=embedding_model,
+            threshold=settings.classifier.threshold,
+            margin=settings.classifier.margin,
+            top_k=settings.classifier.top_k,
+        )
+
+        small_llm = settings.small_chat.getSmallChatModel()
+
+        _engine = ChatEngine(
+            paper_library=_get_library(),
+            classifier=classifier,
+            small_llm=small_llm,
+        )
     return _engine
 
 

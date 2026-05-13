@@ -48,7 +48,12 @@ class StoreSettings(BaseModel):
 
 
 class LLMSettings(BaseModel):
-    """LLM configuration for enrichment, scoring, and answer generation."""
+    """LLM configuration for enrichment, scoring, and answer generation.
+
+    Resolves credentials in order:
+      1. Explicit value set on the field
+      2. Provider-specific env var (e.g. ``ANTHROPIC_API_KEY``)
+    """
 
     provider: str = Field(
         default="anthropic",
@@ -72,25 +77,12 @@ class LLMSettings(BaseModel):
 
     def get_llm(self) -> Any:
         """Build and return an LLM client based on the provider."""
-        import os
-
-        # Resolve api_key — use env var as fallback
         api_key = self.api_key
         base_url = self.base_url
         if not api_key:
-            env_map = {
-                "anthropic": "ANTHROPIC_API_KEY",
-                "openai": "OPENAI_API_KEY",
-                "google": "GOOGLE_API_KEY",
-            }
-            api_key = os.environ.get(env_map.get(self.provider, ""), None)
+            api_key = _resolve_api_key(self.provider)
         if not base_url:
-            env_map = {
-                "anthropic": "ANTHROPIC_BASE_URL",
-                "openai": "OPENAI_BASE_URL",
-                "google": "GOOGLE_BASE_URL",
-            }
-            base_url = os.environ.get(env_map.get(self.provider, ""), None)
+            base_url = _resolve_base_url(self.provider)
 
         if self.provider == "anthropic":
             from langchain.chat_models import init_chat_model
@@ -123,6 +115,134 @@ class LLMSettings(BaseModel):
                 kw["api_key"] = api_key
             return ChatGoogleGenAI(**kw)
         raise ValueError(f"Unknown LLM provider: {self.provider}")
+
+
+def _resolve_api_key(provider: str, prefix: str = "") -> str | None:
+    """Resolve an API key from environment variables.
+
+    Checks in order:
+      1. ``{PREFIX}{PROVIDER}_API_KEY`` (e.g. ``SMALL_ANTHROPIC_API_KEY``)
+      2. ``{PROVIDER}_API_KEY`` (standard fallback, only if prefix is set)
+    """
+    import os
+
+    upper = provider.upper()
+    if prefix:
+        value = os.environ.get(f"{prefix}{upper}_API_KEY")
+        if value:
+            return value
+    return os.environ.get(f"{upper}_API_KEY")
+
+
+def _resolve_base_url(provider: str, prefix: str = "") -> str | None:
+    """Resolve a base URL from environment variables.
+
+    Checks in order:
+      1. ``{PREFIX}{PROVIDER}_BASE_URL`` (e.g. ``SMALL_ANTHROPIC_BASE_URL``)
+      2. ``{PROVIDER}_BASE_URL`` (standard fallback, only if prefix is set)
+    """
+    import os
+
+    upper = provider.upper()
+    if prefix:
+        value = os.environ.get(f"{prefix}{upper}_BASE_URL")
+        if value:
+            return value
+    return os.environ.get(f"{upper}_BASE_URL")
+
+
+class SmallChatSettings(BaseModel):
+    """Small / cheap chat model configuration for simple responses (greetings etc.)."""
+
+    provider: str = Field(
+        default="anthropic",
+        description="LLM provider: anthropic, openai, google, or custom",
+    )
+    model_name: str = Field(
+        default="deepseek-v4-flash",
+        description="Model name for the small chat model",
+        env="SMALL_MODEL_NAME",
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="API key (reads from env var if not set)",
+    )
+    base_url: str | None = Field(
+        default=None,
+        description="Custom base URL",
+    )
+    temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=1024, ge=1)
+
+    def getSmallChatModel(self) -> Any:
+        """Build and return a small/cheap LLM client.
+
+        Resolves credentials in order:
+          1. Explicit value set on the field
+          2. ``SMALL_{PROVIDER}_API_KEY`` / ``SMALL_{PROVIDER}_BASE_URL``
+          3. ``{PROVIDER}_API_KEY`` / ``{PROVIDER}_BASE_URL`` (shared fallback)
+        """
+        api_key = self.api_key
+        base_url = self.base_url
+        if not api_key:
+            api_key = _resolve_api_key(self.provider, prefix="SMALL_")
+        if not base_url:
+            base_url = _resolve_base_url(self.provider, prefix="SMALL_")
+
+        if self.provider == "anthropic":
+            from langchain.chat_models import init_chat_model
+            return init_chat_model(self.model_name,
+                                   model_provider="anthropic",
+                                   api_key=api_key,
+                                   base_url=base_url,
+                                   temperature=self.temperature,
+                                   max_tokens=self.max_tokens)
+        if self.provider == "openai":
+            from langchain_openai import ChatOpenAI
+            kw = {
+                "model": self.model_name,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            if api_key:
+                kw["api_key"] = api_key
+            if self.base_url:
+                kw["base_url"] = self.base_url
+            return ChatOpenAI(**kw)
+        if self.provider == "google":
+            from langchain_google_genai import ChatGoogleGenAI
+            kw = {
+                "model": self.model_name,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            if api_key:
+                kw["api_key"] = api_key
+            return ChatGoogleGenAI(**kw)
+        raise ValueError(f"Unknown LLM provider: {self.provider}")
+
+
+class ClassifierSettings(BaseModel):
+    """Question classification settings."""
+
+    threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Minimum top-K average similarity to accept a category",
+    )
+    margin: float = Field(
+        default=0.06,
+        ge=0.0,
+        le=1.0,
+        description="Best category must beat runner-up by this margin, else → 其他",
+    )
+    top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of top exemplars to average per category",
+    )
 
 
 class MCPServerConfig(BaseModel):
@@ -187,4 +307,6 @@ class Settings(BaseModel):
     chunk: ChunkSettings = Field(default_factory=ChunkSettings)
     store: StoreSettings = Field(default_factory=StoreSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    small_chat: SmallChatSettings = Field(default_factory=SmallChatSettings)
+    classifier: ClassifierSettings = Field(default_factory=ClassifierSettings)
     mcp: MCPSettings = Field(default_factory=lambda: MCPSettings.load_default())
